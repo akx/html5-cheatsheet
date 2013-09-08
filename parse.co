@@ -1,0 +1,138 @@
+glob = require "glob"
+webidl = require "webidl2"
+fs = require "fs"
+util = require "util"
+
+flatten = (arr, joiner=' ') -> (for arr => if & then "#{&}").join(joiner)
+put = !-> console.log flatten(@@)
+span = (content, klass='') -> "<span class='#klass'>#content</span>"
+typespan = (content) ->
+	if objects.all[content] then
+		return "<a href='\##{content}' class='typename'>#content</a>"
+	else
+		return "<span class='typename'>#content</span>"
+
+
+readIDLs = !(files) ->
+	objects = {}
+
+	for file of files
+		data = fs.readFileSync file, "UTF-8"
+		#continue unless data.indexOf("webaudio") > 0
+		try
+			idl = webidl.parse(data)
+		catch
+			continue
+		
+		for obj of idl
+			if target = objects@[obj.type][obj.name] then  # lazy
+				target.members = target@@members.concat(obj.members)
+			else
+				objects@[obj.type][obj.name] = target = obj
+			objects@all[obj.name] = obj
+
+	return objects
+
+idlTypeToText = !(idlType) ->
+	typename = "#{idlType.idlType}"
+	if idlType.array then typename += "[]"
+	return typename
+
+printMembers = !(members, comment="") ->
+	for m of members
+		if m.type == "attribute"
+			typename = idlTypeToText(m.idlType)
+			put "<li class='attr'>",
+				(if m.static then span('static', 'qual static') else ""),
+				(if m.readonly then span('readonly', 'qual readonly') else ""),
+				typespan(typename),
+				span(m.name, 'name'),
+				(if comment then span(comment, 'comment') else ""),
+				(if m.extAttrs?length then span((for m.extAttrs => &name).join(", "), "attrs") else ""),
+				"</li>"
+		else if m.type == "operation"
+			#console.log m
+			typename = idlTypeToText(m.idlType)
+			argbits = []
+			for arg of m.arguments
+				argbits.push span(flatten([
+					typespan(idlTypeToText(arg.idlType)), " "
+					span(arg.name, "name"),
+					(if arg.default then span("=#{arg.default.value}", 'default') else '')
+					(if arg.variadic then span("...", 'variadic') else '')
+				], ''), "arg #{if arg.optional then 'optional' else ''}")
+				argbits.push ", "
+			argbits.pop()
+			argbits.unshift("(")
+			argbits.push(")")
+			put "<li class='op'>",
+				typespan(typename),
+				span(m.name, 'name'),
+				flatten(argbits, ''),
+				(if comment then span(comment, 'comment') else ""),
+				(if m.extAttrs?length then span((for m.extAttrs => &name).join(", "), "attrs") else ""),
+				"</li>"
+		else
+			0 #put "<li>#{m.name} (#{m.type})</li>"
+
+			#console.log util.inspect(m, {depth: null, +colors})
+
+
+walkInterface = !(iface) ->
+	put "<div class='iface'>"
+	put "<h1 id='#{iface.name}'>#{iface.name}</h1>\n"
+	put "<ul>"
+	parent = iface
+	while (parent = objects.interface[parent.inheritance]) then
+		printMembers(parent.members, "(from #{parent.name})")
+	printMembers(iface.members)
+	put "</ul>"
+	put "</div>"
+
+walkEnum = !(enu) ->
+	put "<div class='enum'>"
+	put "<h1 id='#{enu.name}'>enum #{enu.name}</h1>\n"
+	put "<ul>"
+	for value of enu.values
+		put "<li class='enum-value'>", value, "</li>"
+	put "</ul>"
+	put "</div>"
+
+
+put '''
+<style>
+body { font: 9pt/1.3 Verdana, sans-serif; -webkit-column-count: 5 }
+ul, li { padding: 0; margin: 0 }
+li {
+	list-style: none;
+	padding: 3px;
+	margin-bottom: 2px;
+	border-radius: 10px
+}
+h1 {font-size: 15pt}
+.iface,.enum {-webkit-column-break-inside: avoid}
+.op {background: #F3B7B7}
+.attr {background: #F7E2CE}
+.type {font-weight: bold}
+.comment {opacity: 0.5}
+.arg.optional .name, .arg.optional .default {opacity: 0.7}
+.qual {font-weight: italic}
+.readonly {color: blue}
+.static {color: green}
+.attrs {font-size: 80%}
+.attrs:before {content:'['}
+.attrs:after {content:']'}
+a.typename {text-decoration: none; color: inherit; border-bottom: 1px dotted rgba(0, 0, 0, 0.5)}
+</style>
+
+'''
+
+files = glob.sync("idl/**/*.webidl")
+objects = readIDLs(files)
+for name, obj in objects.all
+	if obj.type == "interface"
+		walkInterface(obj)
+	else if obj.type == "enum"
+		walkEnum(obj)
+	#else
+	#	console.log obj.name, obj.type
